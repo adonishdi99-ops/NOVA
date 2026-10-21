@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NOVA</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #05050a;
+    overflow: hidden;
+    font-family: 'Share Tech Mono', 'Courier New', monospace;
+    color: #00ddff;
+    user-select: none;
+  }
+
+  #crt {
+    position: fixed; inset: 0; pointer-events: none; z-index: 100;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+    background-size: 100% 3px, 4px 100%;
+    animation: flicker 0.15s infinite;
+  }
+  #crt::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.4) 100%);
+    box-shadow: inset 0 0 80px rgba(0,0,0,0.6);
+  }
+  @keyframes flicker {
+    0% { opacity: 0.97; } 50% { opacity: 1; } 100% { opacity: 0.98; }
+  }
+
+  #grid {
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,180,255,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,180,255,0.05) 1px, transparent 1px);
+    background-size: 64px 64px;
+    pointer-events: none;
+    mask-image: radial-gradient(circle at 50% 50%, black 30%, transparent 80%);
+  }
+
+  #glow {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -55%);
+    width: 600px; height: 600px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,100,200,0.22) 0%, transparent 70%);
+    pointer-events: none; transition: background 1.2s ease; filter: blur(20px);
+  }
+  #glow-core {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -55%);
+    width: 200px; height: 200px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,200,255,0.15) 0%, transparent 70%);
+    pointer-events: none; transition: background 1.2s ease; filter: blur(8px);
+  }
+
+  #canvas-container { position: fixed; inset: 0; z-index: 1; }
+
+  .corner { position: fixed; width: 40px; height: 40px; z-index: 10; transition: border-color 0.8s; }
+  .tl { top:24px; left:24px;  border-top:  2px solid rgba(0,180,255,.4); border-left:  2px solid rgba(0,180,255,.4); }
+  .tr { top:24px; right:24px; border-top:  2px solid rgba(0,180,255,.4); border-right: 2px solid rgba(0,180,255,.4); }
+  .bl { bottom:24px; left:24px;  border-bottom: 2px solid rgba(0,180,255,.4); border-left:  2px solid rgba(0,180,255,.4); }
+  .br { bottom:24px; right:24px; border-bottom: 2px solid rgba(0,180,255,.4); border-right: 2px solid rgba(0,180,255,.4); }
+
+  #title {
+    position: fixed; top: 32px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; letter-spacing: .6em; opacity: .5; text-transform: uppercase; z-index: 10;
+  }
+  #ws-dot {
+    position: fixed; top: 28px; right: 64px;
+    font-size: 10px; letter-spacing: .15em; opacity: .5; z-index: 10;
+    transition: color .6s, opacity .6s;
+  }
+  #clock {
+    position: fixed; top: 28px; left: 64px;
+    font-size: 10px; letter-spacing: .15em; opacity: .4; z-index: 10;
+  }
+
+  #ui {
+    position: fixed; inset: 0; z-index: 5;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  #spacer { height: 340px; }
+
+  #status {
+    font-size: 14px; letter-spacing: .4em;
+    text-transform: uppercase; opacity: .95; margin-top: 24px;
+    transition: color .8s ease, text-shadow .8s;
+    text-shadow: 0 0 10px currentColor;
+  }
+  #transcript {
+    font-size: 13px; opacity: .55; margin-top: 12px;
+    font-style: italic; max-width: 480px; text-align: center;
+    letter-spacing: .06em; min-height: 20px;
+    transition: opacity .4s;
+    text-shadow: 0 0 8px rgba(0,200,255,0.2);
+  }
+
+  #query {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; letter-spacing: .25em; opacity: .3; text-transform: uppercase; z-index: 10;
+  }
+  #waveform {
+    position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+    width: 300px; height: 40px; opacity: .35; z-index: 5;
+  }
+
+  #log-panel {
+    position: fixed; top: 80px; right: 32px; width: 220px; z-index: 5;
+    font-size: 10px; line-height: 1.6; opacity: .35;
+    text-align: right; letter-spacing: .05em;
+    pointer-events: none;
+  }
+  #log-panel div { margin-bottom: 4px; opacity: 0; animation: logIn .4s forwards; }
+  @keyframes logIn { to { opacity: 1; } }
+
+  #stats {
+    position: fixed; bottom: 30px; left: 32px; z-index: 10;
+    font-size: 9px; opacity: .25; line-height: 1.5; letter-spacing: .1em;
+  }
+
+  #hint {
+    position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; opacity: .2; letter-spacing: .2em;
+    animation: pulse 2s infinite; pointer-events: none; z-index: 5;
+  }
+  @keyframes pulse { 0%,100%{opacity:.15} 50%{opacity:.35} }
+
+  #mute-btn {
+    position: fixed; bottom: 96px; right: 56px; z-index: 20;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(0,20,40,0.45); border: 1px solid rgba(0,180,255,.4);
+    color: #00ddff; font-size: 18px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto; transition: background .3s ease, border-color .3s ease, color .3s ease;
+    backdrop-filter: blur(4px);
+  }
+  #mute-btn:hover { background: rgba(0,180,255,0.15); }
+  #mute-btn.muted { border-color: rgba(255,70,70,.6); color: #ff5c5c; background: rgba(50,0,0,0.35); }
+
+  #text-input-bar {
+    position: fixed; bottom: 150px; left: 50%; transform: translateX(-50%);
+    z-index: 20; display: flex; gap: 8px; width: 360px;
+    pointer-events: auto;
+  }
+  #text-input {
+    flex: 1; background: rgba(0,20,40,0.5); border: 1px solid rgba(0,180,255,.35);
+    border-radius: 20px; padding: 10px 16px; color: #cdeeff;
+    font-family: 'Share Tech Mono', 'Courier New', monospace; font-size: 12px;
+    letter-spacing: .04em; outline: none; backdrop-filter: blur(4px);
+    transition: border-color .3s ease;
+  }
+  #text-input::placeholder { color: rgba(180,220,255,0.35); }
+  #text-input:focus { border-color: rgba(0,220,255,.8); }
+  #text-send-btn {
+    width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+    background: rgba(0,20,40,0.5); border: 1px solid rgba(0,180,255,.4);
+    color: #00ddff; font-size: 15px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .3s ease;
+  }
+  #text-send-btn:hover { background: rgba(0,180,255,0.2); }
+</style>
+<base target="_blank">
+</head>
+<body>
+
+<div id="crt"></div>
+<div id="grid"></div>
+<div id="glow"></div>
+<div id="glow-core"></div>
+<div id="canvas-container"></div>
+
+<div class="corner tl"></div>
+<div class="corner tr"></div>
+<div class="corner bl"></div>
+<div class="corner br"></div>
+
+<div id="title">NOVA — NEURAL CORE v4.2</div>
+<div id="ws-dot">◉ CONNECTING</div>
+<div id="clock">00:00:00</div>
+<button id="mute-btn" title="Mute microphone">🎤</button>
+
+<div id="ui">
+  <div id="spacer"></div>
+  <div id="status">STANDBY</div>
+  <div id="transcript">Initializing neural core...</div>
+</div>
+
+<div id="query">NEURAL CORE — ACTIVE SESSION</div>
+<canvas id="waveform" width="300" height="40"></canvas>
+
+<div id="text-input-bar">
+  <input id="text-input" type="text" placeholder="Type a command..." autocomplete="off" />
+  <button id="text-send-btn" title="Send">➤</button>
+</div>
+
+<div id="log-panel"></div>
+<div id="stats">
+  <div>CPU: <span id="cpu">12</span>%</div>
+  <div>MEM: <span id="mem">4.2</span> GB</div>
+  <div>NET: <span id="net">OFFLINE</span></div>
+</div>
+<div id="hint">CLICK ANYWHERE OR PRESS SPACE TO INTERACT</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ═════════════════════════════════════════════════════════════════════════════
+//  CONFIGURATION
+// ═════════════════════════════════════════════════════════════════════════════
+const CONFIG = {
+  wsUrl: 'ws://localhost:8765',
+  mouseParallax: 0.4,
+  particleCount: 400,
+};
+
+const COLORS = {
+  IDLE:       { sphere: 0x0088cc, ring: 0x0088cc, glow: 'rgba(0,100,200,0.22)',  core: 'rgba(0,200,255,0.12)' },
+  LISTENING:  { sphere: 0x00ddff, ring: 0x00ddff, glow: 'rgba(0,220,255,0.30)', core: 'rgba(0,240,255,0.22)' },
+  PROCESSING: { sphere: 0xff9500, ring: 0xff6600, glow: 'rgba(255,120,0,0.30)',  core: 'rgba(255,160,0,0.20)' },
+  SPEAKING:   { sphere: 0xffffff, ring: 0x44aaff, glow: 'rgba(120,210,255,0.35)',core: 'rgba(180,230,255,0.25)' },
+  MUTED:      { sphere: 0x666677, ring: 0x666677, glow: 'rgba(90,90,110,0.15)',  core: 'rgba(90,90,110,0.08)' },
+};
+const LABELS = {
+  IDLE: 'STANDBY', LISTENING: 'LISTENING...', PROCESSING: 'PROCESSING...', SPEAKING: 'SPEAKING...',
+  MUTED: 'MIC MUTED',
+};
+const DEFAULTS = {
+  IDLE: 'Say "Nova" to begin', LISTENING: 'Listening for your command...',
+  PROCESSING: 'Analyzing neural patterns...', SPEAKING: '',
+  MUTED: 'Microphone muted — click the mic icon to resume',
+};
+
+let currentState = 'IDLE';
+let targetColor = { ...COLORS.IDLE };
+let currentColor = { ...COLORS.IDLE };
+let isConnected = false;
+let reconnectTimer = null;
+let currentWs = null;
+let micMuted = false;
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  THREE.JS SCENE
+// ═════════════════════════════════════════════════════════════════════════════
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.z = 3.2;
+
+// Main Wireframe Sphere
+const sphereGeo = new THREE.IcosahedronGeometry(1, 2);
+const wireMat = new THREE.LineBasicMaterial({ color: 0x00ddff, transparent: true, opacity: 0.5 });
+const wireMesh = new THREE.LineSegments(new THREE.WireframeGeometry(sphereGeo), wireMat);
+scene.add(wireMesh);
+
+// Inner Core Shell
+const coreGeo = new THREE.SphereGeometry(0.92, 32, 32);
+const coreMat = new THREE.MeshBasicMaterial({
+  color: 0x002244, transparent: true, opacity: 0.12, side: THREE.BackSide
+});
+const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+scene.add(coreMesh);
+
+// Particle Field
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(CONFIG.particleCount * 3);
+const dustVel = new Float32Array(CONFIG.particleCount);
+for (let i = 0; i < CONFIG.particleCount; i++) {
+  const r = 2 + Math.random() * 3;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  dustPos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+  dustPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+  dustPos[i*3+2] = r * Math.cos(phi);
+  dustVel[i] = (Math.random() - 0.5) * 0.002;
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dustMat = new THREE.PointsMaterial({
+  color: 0x44aaff, size: 0.025, transparent: true, opacity: 0.35, sizeAttenuation: true
+});
+const dustSystem = new THREE.Points(dustGeo, dustMat);
+scene.add(dustSystem);
+
+// Surface Nodes
+const nodeGeo = new THREE.BufferGeometry();
+nodeGeo.setAttribute('position', sphereGeo.attributes.position.clone());
+const nodeMat = new THREE.PointsMaterial({
+  color: 0xffffff, size: 0.022, transparent: true, opacity: 0.6, sizeAttenuation: true
+});
+const nodeSystem = new THREE.Points(nodeGeo, nodeMat);
+scene.add(nodeSystem);
+
+// Orbital Rings
+function makeRing(r, tube, rx, ry, rz, opacity, color = 0x00ddff) {
+  const mesh = new THREE.Mesh(
+    new THREE.TorusGeometry(r, tube, 8, 200),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending })
+  );
+  mesh.rotation.x = rx; mesh.rotation.y = ry; mesh.rotation.z = rz;
+  scene.add(mesh); return mesh;
+}
+const rings = [
+  makeRing(1.35, 0.005,  Math.PI*0.30, 0.1, 0,    0.7),
+  makeRing(1.55, 0.003,  Math.PI*0.55, 0.3, 0.2,  0.4),
+  makeRing(1.75, 0.002,  Math.PI*0.15, 0.5, 0.4,  0.25),
+  makeRing(2.05, 0.0015, Math.PI*0.40, 0.8, 0.6,  0.15),
+];
+
+// Energy Bars
+const barGroup = new THREE.Group();
+const bars = [];
+for (let i = 0; i < 16; i++) {
+  const h = 0.1 + Math.random() * 0.3;
+  const geo = new THREE.BoxGeometry(0.04, h, 0.04);
+  const mat = new THREE.MeshBasicMaterial({ color: 0x00ddff, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending });
+  const mesh = new THREE.Mesh(geo, mat);
+  const angle = (i / 16) * Math.PI * 2;
+  mesh.position.set(Math.cos(angle)*1.25, 0, Math.sin(angle)*1.25);
+  mesh.lookAt(0,0,0);
+  bars.push({ mesh, baseH: h, angle, speed: 2 + Math.random()*4 });
+  barGroup.add(mesh);
+}
+scene.add(barGroup);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  ANIMATION LOOP
+// ═════════════════════════════════════════════════════════════════════════════
+let t = 0;
+const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+
+function lerpColor(a, b, amt) {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  return (Math.round(ar + (br-ar)*amt) << 16) |
+         (Math.round(ag + (bg-ag)*amt) << 8) |
+          Math.round(ab + (bb-ab)*amt);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  t += 0.016;
+
+  currentColor.sphere = lerpColor(currentColor.sphere, targetColor.sphere, 0.05);
+  currentColor.ring   = lerpColor(currentColor.ring,   targetColor.ring,   0.05);
+
+  const s = currentState;
+  const speed = s === 'PROCESSING' ? 0.022 : s === 'LISTENING' ? 0.011 : 0.005;
+
+  wireMesh.rotation.y += speed;
+  wireMesh.rotation.x += speed * 0.35;
+  nodeSystem.rotation.y += speed;
+  nodeSystem.rotation.x += speed * 0.35;
+
+  rings[0].rotation.z += 0.008;
+  rings[1].rotation.z -= 0.005;
+  rings[2].rotation.y += 0.004;
+  rings[3].rotation.x += 0.003;
+
+  let scale = 1;
+  let opacity = 0.45;
+  if      (s === 'SPEAKING')   { scale = 1 + Math.sin(t*10) * 0.07; opacity = 0.9; }
+  else if (s === 'LISTENING')  { scale = 1 + Math.sin(t*3)  * 0.04; opacity = 0.75; }
+  else if (s === 'PROCESSING') { scale = 1 + Math.sin(t*6)  * 0.05; opacity = 0.65; }
+  else                         { scale = 1 + Math.sin(t*1.5)* 0.018; opacity = 0.45; }
+
+  wireMesh.scale.setScalar(scale);
+  nodeSystem.scale.setScalar(scale);
+  coreMesh.scale.setScalar(scale * 0.98);
+
+  wireMat.color.setHex(currentColor.sphere);
+  wireMat.opacity = opacity;
+  nodeMat.color.setHex(s === 'SPEAKING' ? 0x88ccff : 0xffffff);
+  nodeMat.opacity = s === 'SPEAKING' ? 0.85 : 0.55;
+  coreMat.color.setHex(currentColor.sphere);
+  coreMat.opacity = s === 'SPEAKING' ? 0.2 : 0.12;
+
+  rings.forEach((r, i) => {
+    r.material.color.setHex(currentColor.ring);
+    r.material.opacity = [0.7,0.4,0.25,0.15][i] * (s==='SPEAKING'?1.3:1);
+  });
+
+  const pos = dustSystem.geometry.attributes.position.array;
+  for (let i = 0; i < CONFIG.particleCount; i++) {
+    const x = pos[i*3], z = pos[i*3+2];
+    const c = Math.cos(dustVel[i]), s2 = Math.sin(dustVel[i]);
+    pos[i*3]   = x*c - z*s2;
+    pos[i*3+2] = x*s2 + z*c;
+    pos[i*3+1] += Math.sin(t + i)*0.001;
+  }
+  dustSystem.geometry.attributes.position.needsUpdate = true;
+  dustSystem.material.color.setHex(currentColor.ring);
+
+  bars.forEach((b, i) => {
+    const energy = s === 'SPEAKING' ? Math.sin(t*b.speed + i)*0.5 + 0.5 :
+                   s === 'LISTENING' ? Math.sin(t*2 + i)*0.3 + 0.3 :
+                   s === 'PROCESSING' ? Math.random()*0.6 : 0.1;
+    const h = b.baseH + energy * 0.6;
+    b.mesh.scale.y = 1 + energy * 3;
+    b.mesh.material.opacity = 0.2 + energy * 0.5;
+    b.mesh.material.color.setHex(currentColor.sphere);
+  });
+  barGroup.rotation.y += 0.01;
+
+  mouse.x += (mouse.tx - mouse.x) * 0.05;
+  mouse.y += (mouse.ty - mouse.y) * 0.05;
+  camera.position.x = mouse.x * CONFIG.mouseParallax;
+  camera.position.y = mouse.y * CONFIG.mouseParallax * 0.6;
+  camera.lookAt(0,0,0);
+
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+document.addEventListener('mousemove', e => {
+  mouse.tx = (e.clientX / window.innerWidth - 0.5) * 2;
+  mouse.ty = -(e.clientY / window.innerHeight - 0.5) * 2;
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  UI & STATE MANAGEMENT
+// ═════════════════════════════════════════════════════════════════════════════
+function setState(state, text) {
+  if (!COLORS[state]) state = 'IDLE';
+  
+  // GUARD: Don't re-trigger if state and text are identical
+  const transEl = document.getElementById('transcript');
+  if (currentState === state && transEl.textContent === (text || DEFAULTS[state] || '')) {
+    return;
+  }
+  
+  currentState = state;
+  targetColor = { ...COLORS[state] };
+
+  const glow = document.getElementById('glow');
+  const glowCore = document.getElementById('glow-core');
+  glow.style.background = `radial-gradient(circle, ${COLORS[state].glow} 0%, transparent 70%)`;
+  glowCore.style.background = `radial-gradient(circle, ${COLORS[state].core} 0%, transparent 70%)`;
+
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = LABELS[state] || state;
+  statusEl.style.color = state === 'PROCESSING' ? '#ffaa33' : state === 'SPEAKING' ? '#aaddff' : '#00ddff';
+
+  transEl.style.opacity = '0';
+  setTimeout(() => {
+    transEl.textContent = (text && text.trim()) ? text : (DEFAULTS[state] || '');
+    transEl.style.opacity = state === 'SPEAKING' ? '0.85' : '0.5';
+  }, 150);
+
+  addLog(`[${new Date().toLocaleTimeString()}] STATE → ${state}`);
+}
+
+function addLog(msg) {
+  const panel = document.getElementById('log-panel');
+  const div = document.createElement('div');
+  div.textContent = msg;
+  panel.prepend(div);
+  if (panel.children.length > 8) panel.lastChild.remove();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  MIC MUTE TOGGLE
+// ═════════════════════════════════════════════════════════════════════════════
+const muteBtn = document.getElementById('mute-btn');
+
+function updateMuteButton() {
+  muteBtn.textContent = micMuted ? '🔇' : '🎤';
+  muteBtn.classList.toggle('muted', micMuted);
+  muteBtn.title = micMuted ? 'Unmute microphone' : 'Mute microphone';
+}
+
+muteBtn.addEventListener('click', () => {
+  micMuted = !micMuted;
+  updateMuteButton();
+  addLog(`[${new Date().toLocaleTimeString()}] MIC ${micMuted ? 'MUTED' : 'UNMUTED'}`);
+  if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+    currentWs.send(JSON.stringify({ type: 'set_mute', value: micMuted }));
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  TEXT INPUT MODE
+// ═════════════════════════════════════════════════════════════════════════════
+const textInput = document.getElementById('text-input');
+const textSendBtn = document.getElementById('text-send-btn');
+
+function sendTextCommand() {
+  const text = textInput.value.trim();
+  if (!text) return;
+  if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+    currentWs.send(JSON.stringify({ type: 'text_command', text }));
+    addLog(`[${new Date().toLocaleTimeString()}] TYPED: ${text}`);
+  } else {
+    addLog(`[${new Date().toLocaleTimeString()}] Not connected — command not sent`);
+  }
+  textInput.value = '';
+}
+
+textSendBtn.addEventListener('click', sendTextCommand);
+textInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); sendTextCommand(); }
+  e.stopPropagation(); // don't let Space/typing reach the global demo-mode listener
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  CLOCK & STATS
+// ═════════════════════════════════════════════════════════════════════════════
+setInterval(() => {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-US', {hour12:false});
+  document.getElementById('cpu').textContent = Math.floor(8 + Math.random()*25);
+  document.getElementById('mem').textContent = (3.5 + Math.random()*2).toFixed(1);
+}, 1000);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  2D WAVEFORM CANVAS
+// ═════════════════════════════════════════════════════════════════════════════
+const waveCanvas = document.getElementById('waveform');
+const waveCtx = waveCanvas.getContext('2d');
+let waveOffset = 0;
+
+function drawWaveform() {
+  waveCtx.clearRect(0, 0, 300, 40);
+  waveCtx.fillStyle = currentState === 'PROCESSING' ? 'rgba(255,150,0,0.4)' :
+                      currentState === 'SPEAKING'   ? 'rgba(150,220,255,0.5)' :
+                      currentState === 'LISTENING'  ? 'rgba(0,220,255,0.4)' : 'rgba(0,180,255,0.2)';
+
+  const bars = 30;
+  const barW = 300 / bars;
+  waveOffset += 0.15;
+
+  for (let i = 0; i < bars; i++) {
+    let h;
+    if (currentState === 'IDLE') {
+      h = 4 + Math.sin(i*0.5 + waveOffset*0.3)*3;
+    } else if (currentState === 'LISTENING') {
+      h = 6 + Math.abs(Math.sin(i*0.8 + waveOffset))*18;
+    } else if (currentState === 'PROCESSING') {
+      h = 4 + Math.random()*22;
+    } else {
+      h = 6 + Math.sin(i*0.6 + waveOffset*2)*16 + Math.cos(i*1.2 - waveOffset)*8;
+    }
+    const x = i * barW;
+    const y = (40 - h) / 2;
+    waveCtx.fillRect(x + 1, y, barW - 2, h);
+  }
+  requestAnimationFrame(drawWaveform);
+}
+drawWaveform();
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  WEBSOCKET
+// ═════════════════════════════════════════════════════════════════════════════
+function connect() {
+  const dotEl = document.getElementById('ws-dot');
+  const netEl = document.getElementById('net');
+
+  try {
+    const ws = new WebSocket(CONFIG.wsUrl);
+
+    currentWs = ws;
+
+    ws.onopen = () => {
+      dotEl.textContent = '◉ CONNECTED';
+      dotEl.style.color = '#00ddff';
+      dotEl.style.opacity = '0.8';
+      netEl.textContent = 'ONLINE';
+      isConnected = true;
+      setState('IDLE');
+      addLog('WebSocket connected');
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    };
+
+    ws.onmessage = e => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.state === 'MUTE_STATUS') {
+          micMuted = !!d.muted;
+          updateMuteButton();
+          return;
+        }
+        setState(d.state, d.text || '');
+      } catch(err) { console.error('WS parse error', err); }
+    };
+
+    ws.onclose = () => {
+      dotEl.textContent = '◉ OFFLINE';
+      dotEl.style.color = '#ff4444';
+      dotEl.style.opacity = '0.5';
+      netEl.textContent = 'OFFLINE';
+      if (isConnected) {
+        isConnected = false;
+        addLog('WebSocket disconnected');
+        setState('IDLE', 'Connection lost — awaiting reconnect...');
+      }
+      // Stay on STANDBY, don't cycle states
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => ws.close();
+  } catch(e) {
+    dotEl.textContent = '◉ UNAVAILABLE';
+    if (!isConnected) {
+      setState('IDLE', 'Neural core offline — awaiting connection...');
+    }
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 5000);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  MANUAL DEMO MODE (click or space to cycle — only when offline)
+// ═════════════════════════════════════════════════════════════════════════════
+const demoStates = ['IDLE','LISTENING','PROCESSING','SPEAKING','IDLE'];
+const demoTexts = [
+  '',
+  'What is the weather like today?',
+  '',
+  'The forecast shows clear skies with a high of 24 degrees Celsius.',
+  ''
+];
+let demoIdx = 0;
+
+function triggerInteraction() {
+  document.getElementById('hint').style.opacity = '0';
+  // Only manual cycle when offline
+  if (!isConnected) {
+    demoIdx = (demoIdx + 1) % demoStates.length;
+    setState(demoStates[demoIdx], demoTexts[demoIdx]);
+  }
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest('#text-input-bar') || e.target.closest('#mute-btn')) return;
+  triggerInteraction();
+});
+document.addEventListener('keydown', e => {
+  if (document.activeElement === textInput) return; // typing (incl. spaces) works normally
+  if (e.code === 'Space') { e.preventDefault(); triggerInteraction(); }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  INIT
+// ═════════════════════════════════════════════════════════════════════════════
+setState('IDLE', 'Initializing neural core...');
+connect();
+
+</script>
+</body>
+</html>

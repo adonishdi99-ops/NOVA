@@ -1,0 +1,97 @@
+# gmail_agent.py
+import base64
+from email.mime.text import MIMEText
+from googleapiclient.discovery import build
+from google_auth import get_credentials
+
+
+def _service():
+    return build('gmail', 'v1', credentials=get_credentials())
+
+
+def _decode_body(payload):
+    """Extract plain text body from a Gmail message payload."""
+    if 'data' in payload.get('body', {}):
+        return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
+    for part in payload.get('parts', []):
+        if part.get('mimeType') == 'text/plain':
+            data = part['body'].get('data', '')
+            if data:
+                return base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+    return ""
+
+
+def get_unread_emails(max_results=5):
+    """Return a spoken summary of unread emails."""
+    try:
+        svc     = _service()
+        results = svc.users().messages().list(
+            userId='me', labelIds=['INBOX', 'UNREAD'], maxResults=max_results
+        ).execute()
+
+        messages = results.get('messages', [])
+        if not messages:
+            return "You have no unread emails."
+
+        summaries = []
+        for msg in messages:
+            detail  = svc.users().messages().get(userId='me', id=msg['id'], format='metadata',
+                        metadataHeaders=['From', 'Subject']).execute()
+            headers = {h['name']: h['value'] for h in detail['payload']['headers']}
+            sender  = headers.get('From', 'Unknown').split('<')[0].strip()
+            subject = headers.get('Subject', 'No subject')
+            summaries.append(f"{sender}: {subject}")
+
+        count = len(summaries)
+        intro = f"You have {count} unread email{'s' if count > 1 else ''}. "
+        return intro + ". ".join(summaries)
+
+    except Exception as e:
+        print(f"[gmail] Error: {e}")
+        return "I couldn't fetch your emails right now."
+
+
+def read_latest_email():
+    """Read the content of the most recent unread email."""
+    try:
+        svc     = _service()
+        results = svc.users().messages().list(
+            userId='me', labelIds=['INBOX', 'UNREAD'], maxResults=1
+        ).execute()
+
+        messages = results.get('messages', [])
+        if not messages:
+            return "You have no unread emails."
+
+        msg_id  = messages[0]['id']
+        detail  = svc.users().messages().get(userId='me', id=msg_id, format='full').execute()
+        headers = {h['name']: h['value'] for h in detail['payload']['headers']}
+        sender  = headers.get('From', 'Unknown').split('<')[0].strip()
+        subject = headers.get('Subject', 'No subject')
+        body    = _decode_body(detail['payload'])[:500]  # cap at 500 chars for voice
+
+        # Mark as read
+        svc.users().messages().modify(
+            userId='me', id=msg_id, body={'removeLabelIds': ['UNREAD']}
+        ).execute()
+
+        return f"Email from {sender}. Subject: {subject}. {body}"
+
+    except Exception as e:
+        print(f"[gmail] Error: {e}")
+        return "I couldn't read that email right now."
+
+
+def send_email(to, subject, body):
+    """Send an email."""
+    try:
+        svc     = _service()
+        message = MIMEText(body)
+        message['to']      = to
+        message['subject'] = subject
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+        return f"Email sent to {to}."
+    except Exception as e:
+        print(f"[gmail] Send error: {e}")
+        return "I wasn't able to send the email."

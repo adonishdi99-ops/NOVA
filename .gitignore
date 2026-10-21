@@ -1,0 +1,65 @@
+# --- Secrets (most important) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+credentials.json
+token.json
+token.pickle
+client_secret*.json
+config.local.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+
+# --- OS junk (Windows) ---
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- NOVA runtime data ---
+logs/
+*.log
+screenshots/
+recordings/
+*.wav
+*.mp3
+temp/
+tmp/
+cache/
+
+# --- Memory / indexes generated at runtime ---
+memory/*.json
+memory/*.db
+app_index.json
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Models and large downloads ---
+models/
+*.bin
+*.pt
+*.onnx
+*.gguf
+whisper_cache/
