@@ -47,3 +47,34 @@ def test_failing_command_is_logged_spoken_and_loop_continues(main_mod, capsys):
 
 def test_process_command_still_returns_stop_for_exit(main_mod):
     assert main_mod._process_command("goodbye nova") is True
+
+
+# ── M6: delete-by-name confirms the real event, then deletes it by id ───────
+GYM = {"id": "gym1", "title": "Gym with Sarah", "when": "Tuesday November 24 at 6:00 PM"}
+
+
+def test_calendar_delete_confirms_real_title_and_date(main_mod):
+    _think_returns(main_mod, "", "calendar_delete", "gym")
+    main_mod.find_event_by_name = lambda name: (GYM, None)
+    main_mod._test_calls["listen"].append("yes")
+    main_mod._handle_command("delete gym")
+    assert ("Are you sure you want to delete 'Gym with Sarah' on Tuesday November 24 "
+            "at 6:00 PM?") in main_mod._test_calls["spoken"]
+    assert main_mod._test_calls["deleted_ids"] == ["gym1"]
+    assert main_mod._test_calls["spoken"][-1] == "Removed Gym with Sarah"
+
+
+def test_calendar_delete_cancel_deletes_nothing(main_mod):
+    _think_returns(main_mod, "", "calendar_delete", "gym")
+    main_mod.find_event_by_name = lambda name: (GYM, None)
+    main_mod._test_calls["listen"].append("no")
+    main_mod._handle_command("delete gym")
+    assert main_mod._test_calls["deleted_ids"] == []
+
+
+def test_calendar_delete_no_match_speaks_reason_without_asking(main_mod):
+    _think_returns(main_mod, "", "calendar_delete", "dentist")
+    main_mod.find_event_by_name = lambda name: (None, "I couldn't find an event called 'dentist'.")
+    main_mod._handle_command("delete dentist")
+    assert main_mod._test_calls["spoken"] == ["I couldn't find an event called 'dentist'."]
+    assert main_mod._test_calls["deleted_ids"] == []

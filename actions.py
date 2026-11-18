@@ -1,6 +1,7 @@
 # actions.py
 import os
 import time
+import shutil
 import subprocess
 import webbrowser
 import ctypes
@@ -84,6 +85,8 @@ _BUILTINS = {
     "calc", "notepad", "mspaint", "cmd", "explorer",
     "taskmgr", "regedit", "msconfig", "winword", "excel", "powerpnt",
 }
+# Office apps registered under App Paths rather than PATH.
+_APP_PATHS_BUILTINS = {"winword", "excel", "powerpnt"}
 _BUILTIN_MAP = {
     "calculator": "calc",
     "paint":      "mspaint",
@@ -167,12 +170,27 @@ def _open_app(app_name: str) -> bool:
             return True
 
     cmd = _BUILTIN_MAP.get(name, name)
+    if cmd in _APP_PATHS_BUILTINS:
+        # Office isn't on PATH; ShellExecute (os.startfile) resolves it via App Paths.
+        try:
+            os.startfile(cmd)
+            return True
+        except OSError as e:
+            print(f"[actions] Could not start '{cmd}': {e}")
+            return False
     if cmd in _BUILTINS:
         subprocess.Popen([cmd])
         return True
 
-    # The old `where <name>` + shell=True fallback (anything on PATH) was removed:
-    # it ran the LLM's text through cmd.exe. Only indexed or built-in apps launch.
+    # Anything else on PATH: resolve it ourselves and launch with no shell.
+    # Bare names only, so the LLM can't point at an arbitrary file path.
+    if not any(sep in name for sep in ("/", "\\", ":")):
+        path = shutil.which(name)
+        if path:
+            subprocess.Popen([path])
+            print(f"[actions] PATH: '{name}' → {path}")
+            return True
+
     print(f"[actions] Not found: '{name}'")
     return False
 

@@ -20,19 +20,22 @@ def _module(name, **attrs):
 def main_mod(monkeypatch):
     """Import main.py with its heavy/OS-specific dependencies stubbed out.
 
-    server/voice/brain/actions need a WebSocket loop, mic + speakers, a Groq
+    server/voice/brain/actions/calendar_agent need a WebSocket loop, mic + speakers, a Groq
     key and Windows. Tests drive main's logic through these stubs instead.
     """
-    calls = {"spoken": [], "executed": [], "email_calendar": [], "listen": []}
+    calls = {"spoken": [], "executed": [], "email_calendar": [], "listen": [],
+             "deleted_ids": [], "server_started": []}
 
     stubs = {
-        "server": _module("server", broadcast=lambda *a, **k: None),
+        "server": _module("server", broadcast=lambda *a, **k: None,
+                          start=lambda: calls["server_started"].append(True)),
         "voice": _module(
             "voice",
             speak=lambda text: calls["spoken"].append(text),
             listen=lambda: calls["listen"].pop(0) if calls["listen"] else "",
         ),
-        "brain": _module("brain", think=lambda command: ("", None, None)),
+        "brain": _module("brain", think=lambda command: ("", None, None),
+                         groq_key_problem=lambda: None),
         "actions": _module(
             "actions",
             execute=lambda a, p=None: calls["executed"].append((a, p)) or True,
@@ -40,6 +43,12 @@ def main_mod(monkeypatch):
             SIMPLE_ACTIONS={"system_sleep": None, "system_restart": None,
                             "system_shutdown": None, "screenshot": None},
             DANGEROUS_ACTIONS={"system_restart", "system_shutdown", "system_sleep"},
+        ),
+        "calendar_agent": _module(
+            "calendar_agent",
+            find_event_by_name=lambda name: (None, "not found"),
+            delete_event_by_id=lambda event_id, title: calls["deleted_ids"].append(event_id)
+                                                     or (True, f"Removed {title}"),
         ),
     }
     for name, mod in stubs.items():

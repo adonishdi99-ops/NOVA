@@ -62,9 +62,40 @@ def test_close_app_rejects_metachars_and_spawns_nothing(actions_mod, name):
     assert actions_mod._spawned == []
 
 
-def test_open_unknown_app_is_refused_without_path_lookup(actions_mod):
-    assert actions_mod._open_app("python") is False
-    assert actions_mod._spawned == []     # the old `where <name>` shell call is gone
+def test_open_unknown_app_not_on_path_is_refused(actions_mod, monkeypatch):
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda name: None)
+    assert actions_mod._open_app("someunknownapp") is False
+    assert actions_mod._spawned == []     # no `where <name>` shell call any more
+
+
+def test_open_app_on_path_uses_resolved_path_without_shell(actions_mod, monkeypatch):
+    monkeypatch.setattr(actions_mod.shutil, "which",
+                        lambda name: r"C:\Tools\code.exe" if name == "code" else None)
+    assert actions_mod._open_app("Code") is True
+    kind, args, kwargs = actions_mod._spawned[0]
+    assert (kind, args) == ("popen", [r"C:\Tools\code.exe"])
+    assert not kwargs.get("shell")
+
+
+@pytest.mark.parametrize("name", [r"c:\users\me\downloads\evil", "..\\evil", "dir/evil", "c:evil"])
+def test_open_app_never_resolves_paths(actions_mod, monkeypatch, name):
+    looked_up = []
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda n: looked_up.append(n) or "C:\\x.exe")
+    assert actions_mod._open_app(name) is False
+    assert looked_up == [] and actions_mod._spawned == []
+
+
+@pytest.mark.parametrize("name", ["winword", "excel", "powerpnt"])
+def test_office_apps_use_startfile_for_app_paths(actions_mod, name):
+    assert actions_mod._open_app(name) is True
+    assert actions_mod._spawned == [("startfile", name, {})]
+
+
+def test_office_app_missing_returns_false(actions_mod, monkeypatch):
+    def missing(path):
+        raise FileNotFoundError(path)
+    monkeypatch.setattr(actions_mod.os, "startfile", missing, raising=False)
+    assert actions_mod._open_app("winword") is False
 
 
 def test_close_unknown_app_is_refused(actions_mod):

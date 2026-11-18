@@ -1,14 +1,16 @@
 # main.py
 import os
 import re
+import sys
 import time
 import threading
 import traceback
 import webbrowser
 import server
 from voice import speak, listen
-from brain import think
+from brain import think, groq_key_problem
 from actions import execute, handle_email_calendar, SIMPLE_ACTIONS, DANGEROUS_ACTIONS
+from calendar_agent import find_event_by_name, delete_event_by_id
 
 SHUTDOWN_PHRASES = [
     "shut down nova", "shutdown nova",
@@ -107,6 +109,11 @@ def ask_confirm(prompt: str) -> bool:
 
 
 def run():
+    problem = groq_key_problem()
+    if problem:
+        print(f"[main] Cannot start NOVA: {problem}", file=sys.stderr)
+        sys.exit(1)
+
     server.start()
     ui_path = os.path.abspath("ui.html")
     webbrowser.open(f"file:///{ui_path}")
@@ -201,12 +208,22 @@ def _handle_command(command: str) -> bool:
         if not ask_confirm(f"Are you sure you want to {label}?"):
             return False
 
+    elif action == "calendar_delete":
+        # Find the real event first, confirm with its actual title and date,
+        # then delete exactly that event (by id), not a fresh search.
+        match, reason = find_event_by_name(param or "")
+        if not match:
+            nova_speak(reason)
+            return False
+        if not ask_confirm(f"Are you sure you want to delete '{match['title']}' on {match['when']}?"):
+            return False
+        server.broadcast("PROCESSING")
+        _, result = delete_event_by_id(match["id"], match["title"])
+        nova_speak(result)
+        return False
+
     elif action in DELETE_ACTIONS:
-        if action == "calendar_delete":
-            prompt = f"Are you sure you want to delete '{param}' from your calendar?"
-        else:
-            prompt = f"Are you sure you want to delete all events on {param}?"
-        if not ask_confirm(prompt):
+        if not ask_confirm(f"Are you sure you want to delete all events on {param}?"):
             return False
 
     elif action == "email_send":

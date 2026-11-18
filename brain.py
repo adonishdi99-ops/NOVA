@@ -7,7 +7,22 @@ from memory import remember, recall
 
 load_dotenv()
 
-client    = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_API_KEY      = (os.getenv("GROQ_API_KEY") or "").strip()
+_KEY_PLACEHOLDERS = {"", "your_groq_api_key_here"}
+
+
+def groq_key_problem():
+    """None if GROQ_API_KEY looks usable, otherwise a message saying how to fix it."""
+    if GROQ_API_KEY in _KEY_PLACEHOLDERS:
+        return ("GROQ_API_KEY is not set. Copy .env.example to .env in the NOVA folder, "
+                "put your key from https://console.groq.com/keys after GROQ_API_KEY=, "
+                "then start NOVA again.")
+    return None
+
+
+# Created only with a usable key, so importing brain never crashes; main.run()
+# reports the problem via groq_key_problem() before anything else starts.
+client    = None if groq_key_problem() else Groq(api_key=GROQ_API_KEY)
 USER_NAME = os.getenv("USER_NAME", "Boss")
 MAX_HISTORY = 10
 
@@ -123,6 +138,8 @@ Be confident and concise. For things you don't know, say so briefly.
 
 
 def think(command: str):
+    if client is None:
+        return "My Groq API key isn't set, so I can't think right now.", None, None
     try:
         remember("user", command)
 
