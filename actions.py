@@ -131,9 +131,27 @@ def _build_app_db():
 
 APP_DB = _build_app_db()
 
+# Characters with special meaning to cmd.exe or PowerShell. App names come from
+# the LLM, so a name containing any of these is refused outright.
+_SHELL_METACHARS = set('&|<>^%"\'`;$(){}[]*?!\n\r')
+
+
+def has_shell_metachars(name: str) -> bool:
+    return any(c in _SHELL_METACHARS for c in name)
+
+
+def _is_known_app(name: str) -> bool:
+    """Only names from the app index or the hard-coded maps may be launched or killed."""
+    return (name in APP_DB or name in _BUILTIN_MAP
+            or name in _BUILTINS or name in _PROCESS_MAP)
+
 
 def _open_app(app_name: str) -> bool:
     name = app_name.lower().strip()
+
+    if not name or has_shell_metachars(name):
+        print(f"[actions] Rejected app name: {app_name!r}")
+        return False
 
     if name in APP_DB:
         os.startfile(APP_DB[name])
@@ -150,25 +168,28 @@ def _open_app(app_name: str) -> bool:
 
     cmd = _BUILTIN_MAP.get(name, name)
     if cmd in _BUILTINS:
-        subprocess.Popen(cmd, shell=True)
+        subprocess.Popen([cmd])
         return True
 
-    if subprocess.run(f"where {name}", shell=True, capture_output=True).returncode == 0:
-        subprocess.Popen(name, shell=True)
-        return True
-
+    # The old `where <name>` + shell=True fallback (anything on PATH) was removed:
+    # it ran the LLM's text through cmd.exe. Only indexed or built-in apps launch.
     print(f"[actions] Not found: '{name}'")
     return False
 
 
 def _close_app(app_name: str) -> bool:
-    name       = app_name.lower().strip()
+    name = app_name.lower().strip()
+
+    if not name or has_shell_metachars(name) or not _is_known_app(name):
+        print(f"[actions] Rejected app name for close: {app_name!r}")
+        return False
+
     candidates = _PROCESS_MAP.get(name, [f"{name}.exe"])
 
     # Strategy 1: kill by process name
     for exe in candidates:
         result = subprocess.run(
-            f"taskkill /f /im {exe}", shell=True, capture_output=True
+            ["taskkill", "/f", "/im", exe], capture_output=True
         )
         if result.returncode == 0:
             print(f"[actions] Closed by process: {exe}")
@@ -177,20 +198,23 @@ def _close_app(app_name: str) -> bool:
     # Strategy 2: kill by window title (UWP apps)
     title = name.title()
     result = subprocess.run(
-        f'taskkill /f /fi "WINDOWTITLE eq {title}"',
-        shell=True, capture_output=True
+        ["taskkill", "/f", "/fi", f"WINDOWTITLE eq {title}"],
+        capture_output=True
     )
     if result.returncode == 0:
         print(f"[actions] Closed by title: '{title}'")
         return True
 
-    # Strategy 3: PowerShell Stop-Process by partial window title
-    ps_cmd = (
-        f'powershell -Command "'
-        f'Get-Process | Where-Object {{$_.MainWindowTitle -like \'*{title}*\'}} '
-        f'| Stop-Process -Force"'
+    # Strategy 3: PowerShell Stop-Process by partial window title.
+    # The title is passed in an environment variable, never spliced into the script.
+    ps_script = (
+        "Get-Process | Where-Object { $_.MainWindowTitle -like "
+        "('*' + $env:NOVA_CLOSE_TITLE + '*') } | Stop-Process -Force"
     )
-    result = subprocess.run(ps_cmd, shell=True, capture_output=True)
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        capture_output=True, env={**os.environ, "NOVA_CLOSE_TITLE": title},
+    )
     if result.returncode == 0:
         print(f"[actions] Closed via PowerShell: '{title}'")
         return True
@@ -253,7 +277,7 @@ SIMPLE_ACTIONS = {
     "open_settings":   _open_settings,
 }
 
-DANGEROUS_ACTIONS = {"system_restart", "system_shutdown"}
+DANGEROUS_ACTIONS = {"system_restart", "system_shutdown", "system_sleep"}
 
 
 def execute(action_name: str, param=None) -> bool:

@@ -35,12 +35,14 @@ def listen() -> str:
     r.pause_threshold       = 1.5
     r.non_speaking_duration = 0.6
 
-    with sr.Microphone() as source:
-        print("Listening...")
-        r.adjust_for_ambient_noise(source, duration=0.5)
-        audio = r.listen(source, timeout=10, phrase_time_limit=20)
-
     try:
+        # Inside the try so a silent mic (WaitTimeoutError) returns "" instead
+        # of escaping and killing the caller (e.g. ask_confirm in main.py).
+        with sr.Microphone() as source:
+            print("Listening...")
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio = r.listen(source, timeout=10, phrase_time_limit=20)
+
         text = r.recognize_google(audio)
         print("You:", text)
         return text.lower()

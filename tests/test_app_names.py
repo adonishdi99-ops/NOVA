@@ -1,0 +1,104 @@
+"""C2: LLM-chosen app names never reach a shell, and only known apps run."""
+import sys
+import types
+
+import pytest
+
+
+@pytest.fixture
+def actions_mod(monkeypatch):
+    # actions.py imports the Google agents at module level; they aren't under test.
+    gmail = types.ModuleType("gmail_agent")
+    for fn in ("get_unread_emails", "read_latest_email", "send_email"):
+        setattr(gmail, fn, lambda *a, **k: None)
+    cal = types.ModuleType("calendar_agent")
+    for fn in ("get_today_events", "get_upcoming_events", "create_event",
+               "delete_event", "get_events_in_range", "delete_events_by_date"):
+        setattr(cal, fn, lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "gmail_agent", gmail)
+    monkeypatch.setitem(sys.modules, "calendar_agent", cal)
+    monkeypatch.delitem(sys.modules, "actions", raising=False)
+    import actions
+
+    spawned = []
+
+    class Result:
+        returncode = 1
+
+    def fake_popen(args, **kwargs):
+        spawned.append(("popen", args, kwargs))
+    def fake_run(args, **kwargs):
+        spawned.append(("run", args, kwargs))
+        return Result()
+    def fake_startfile(path):
+        spawned.append(("startfile", path, {}))
+
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(actions.subprocess, "run", fake_run)
+    monkeypatch.setattr(actions.os, "startfile", fake_startfile, raising=False)
+    monkeypatch.setattr(actions, "APP_DB", {"spotify": r"C:\fake\Spotify.lnk"})
+    monkeypatch.setattr(actions, "RAPIDFUZZ_OK", False)
+    actions._spawned = spawned
+    yield actions
+    sys.modules.pop("actions", None)
+
+
+INJECTIONS = [
+    "zzqx & calc", "notepad | whoami", "x && del /q c:\\", "a; Remove-Item -Recurse",
+    "$(calc)", "`calc`", "x' ; calc ; '", "spotify\ncalc", "%comspec%", "calc > out.txt",
+    "*", "x)(y",
+]
+
+
+@pytest.mark.parametrize("name", INJECTIONS)
+def test_open_app_rejects_metachars_and_spawns_nothing(actions_mod, name):
+    assert actions_mod._open_app(name) is False
+    assert actions_mod._spawned == []
+
+
+@pytest.mark.parametrize("name", INJECTIONS)
+def test_close_app_rejects_metachars_and_spawns_nothing(actions_mod, name):
+    assert actions_mod._close_app(name) is False
+    assert actions_mod._spawned == []
+
+
+def test_open_unknown_app_is_refused_without_path_lookup(actions_mod):
+    assert actions_mod._open_app("python") is False
+    assert actions_mod._spawned == []     # the old `where <name>` shell call is gone
+
+
+def test_close_unknown_app_is_refused(actions_mod):
+    assert actions_mod._close_app("someunknownapp") is False
+    assert actions_mod._spawned == []
+
+
+def test_open_indexed_app_uses_startfile(actions_mod):
+    assert actions_mod._open_app("Spotify") is True
+    assert actions_mod._spawned == [("startfile", r"C:\fake\Spotify.lnk", {})]
+
+
+def test_open_builtin_uses_argument_list_without_shell(actions_mod):
+    assert actions_mod._open_app("calculator") is True
+    kind, args, kwargs = actions_mod._spawned[0]
+    assert (kind, args) == ("popen", ["calc"])
+    assert not kwargs.get("shell")
+
+
+def test_close_known_app_uses_argument_lists_without_shell(actions_mod):
+    assert actions_mod._close_app("calculator") is False   # fake taskkill always "fails"
+    calls = actions_mod._spawned
+    assert calls[0][1] == ["taskkill", "/f", "/im", "Calculator.exe"]
+    assert all(isinstance(args, list) and not kw.get("shell") for _, args, kw in calls)
+    ps = calls[-1]
+    assert ps[1][0] == "powershell"
+    assert "Calculator" not in ps[1][-1]                     # title not spliced into script
+    assert ps[2]["env"]["NOVA_CLOSE_TITLE"] == "Calculator"
+
+
+def test_execute_open_app_with_injection_is_refused(actions_mod):
+    assert actions_mod.execute("open_app", "zzqx & calc") is False
+    assert actions_mod._spawned == []
+
+
+def test_system_sleep_is_gated(actions_mod):
+    assert "system_sleep" in actions_mod.DANGEROUS_ACTIONS

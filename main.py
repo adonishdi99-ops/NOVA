@@ -1,7 +1,9 @@
 # main.py
 import os
+import re
 import time
 import threading
+import traceback
 import webbrowser
 import server
 from voice import speak, listen
@@ -29,6 +31,7 @@ DELETE_ACTIONS   = {"calendar_delete", "calendar_delete_date"}
 DANGEROUS_LABELS = {
     "system_restart":  "restart your PC",
     "system_shutdown": "shut down your PC",
+    "system_sleep":    "put your PC to sleep",
 }
 
 KNOWN_ACTIONS = (
@@ -47,14 +50,44 @@ CONFIRM_WORDS = {
     "go ahead", "sure", "correct", "right", "proceed", "okay",
 }
 
+# Any of these anywhere in a confirmation reply means "cancel".
+NEGATIVE_WORDS = {
+    "no", "not", "don't", "dont", "stop", "cancel", "wait",
+    "nope", "nah", "never",
+}
+
+# Negations that stop an exit phrase from closing NOVA ("don't stop nova").
+# "stop" is deliberately absent: "stop nova" is itself an exit phrase.
+EXIT_NEGATIONS = {"no", "not", "don't", "dont", "never"}
+
+
+def _words(text: str) -> list:
+    """Lower-cased whole words; keeps apostrophes so "don't" stays one word."""
+    text = (text or "").lower().replace("’", "'")
+    return re.findall(r"[a-z0-9']+", text)
+
+
+def _has_phrase(words: list, phrase: str) -> bool:
+    """True if `phrase` appears in `words` as a run of whole words."""
+    target = phrase.split()
+    n = len(target)
+    return any(words[i:i + n] == target for i in range(len(words) - n + 1))
+
+
+def is_confirmed(response: str) -> bool:
+    """Whole-word match. Any negative word cancels; anything unclear cancels."""
+    words = _words(response)
+    if not words or any(w in NEGATIVE_WORDS for w in words):
+        return False
+    return any(_has_phrase(words, phrase) for phrase in CONFIRM_WORDS)
+
 
 def wants_shutdown(command: str) -> bool:
-    cmd = command.lower()
-    if any(phrase in cmd for phrase in SHUTDOWN_PHRASES):
-        return True
-    has_bye  = any(w in cmd.split() for w in ["bye", "goodbye"])
-    has_name = "nova" in cmd
-    return has_bye and has_name
+    """True only for a whole exit phrase ("goodbye nova") that isn't negated."""
+    words = _words(command)
+    if any(w in EXIT_NEGATIONS for w in words):
+        return False
+    return any(_has_phrase(words, phrase) for phrase in SHUTDOWN_PHRASES)
 
 
 def nova_speak(text: str):
@@ -67,7 +100,7 @@ def ask_confirm(prompt: str) -> bool:
     nova_speak(prompt)
     server.broadcast("LISTENING")
     response = listen()
-    confirmed = any(w in response for w in CONFIRM_WORDS)
+    confirmed = is_confirmed(response)
     if not confirmed:
         nova_speak("Cancelled.")
     return confirmed
@@ -92,7 +125,7 @@ def run():
 
         busy.set()
         try:
-            should_stop = _handle_command(command)
+            should_stop = _process_command(command)
         finally:
             busy.clear()
 
@@ -122,6 +155,20 @@ def _voice_loop(busy: threading.Event):
 
         if command:
             server.COMMAND_QUEUE.put(command)
+
+
+def _process_command(command: str) -> bool:
+    """Runs one command; an exception is logged and spoken, never fatal."""
+    try:
+        return _handle_command(command)
+    except Exception:
+        print(f"[main] Command failed: {command!r}")
+        traceback.print_exc()
+        try:
+            nova_speak("Sorry, something went wrong with that.")
+        except Exception:
+            traceback.print_exc()
+        return False
 
 
 def _handle_command(command: str) -> bool:
@@ -161,6 +208,14 @@ def _handle_command(command: str) -> bool:
             prompt = f"Are you sure you want to delete all events on {param}?"
         if not ask_confirm(prompt):
             return False
+
+    elif action == "email_send":
+        parts = (param or "").split("|", 2)
+        # Malformed params skip the prompt; handle_email_calendar refuses them.
+        if len(parts) == 3:
+            to, subject = parts[0].strip(), parts[1].strip()
+            if not ask_confirm(f"Send an email to {to} with the subject '{subject}'?"):
+                return False
 
     # ── Execute ─────────────────────────────────────────────────────────
     if action in EMAIL_CALENDAR_ACTIONS:
