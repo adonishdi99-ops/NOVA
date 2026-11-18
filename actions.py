@@ -143,6 +143,26 @@ def has_shell_metachars(name: str) -> bool:
     return any(c in _SHELL_METACHARS for c in name)
 
 
+# System tools NOVA must never launch by name (sign-out, disk/boot/registry/
+# permission editors, script hosts). Checked before built-ins and PATH lookup.
+BLOCKED_APPS = {
+    "logoff", "tsdiscon", "shutdown", "format", "diskpart", "bcdedit", "reg",
+    "regedit", "cipher", "takeown", "icacls", "wmic", "net", "sc", "rundll32",
+    "mshta",
+}
+_EXEC_SUFFIXES = (".exe", ".com", ".bat", ".cmd")
+
+
+def is_blocked_app(name: str) -> bool:
+    """True for a blocklisted tool, with or without an extension ("shutdown.exe")."""
+    base = (name or "").lower().strip()
+    for suffix in _EXEC_SUFFIXES:
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base in BLOCKED_APPS
+
+
 def _is_known_app(name: str) -> bool:
     """Only names from the app index or the hard-coded maps may be launched or killed."""
     return (name in APP_DB or name in _BUILTIN_MAP
@@ -154,6 +174,10 @@ def _open_app(app_name: str) -> bool:
 
     if not name or has_shell_metachars(name):
         print(f"[actions] Rejected app name: {app_name!r}")
+        return False
+
+    if is_blocked_app(name):
+        print(f"[actions] Blocked system tool: {app_name!r}")
         return False
 
     if name in APP_DB:
@@ -329,25 +353,26 @@ from calendar_agent import (get_today_events, get_upcoming_events,
 
 def handle_email_calendar(action_name: str, param):
     try:
+        # Each agent returns its own (success, message), so failures report False.
         if action_name == "email_unread":
-            return True, get_unread_emails()
+            return get_unread_emails()
         if action_name == "email_read":
-            return True, read_latest_email()
+            return read_latest_email()
         if action_name == "email_send" and param:
             parts = param.split("|", 2)
             if len(parts) < 3:
                 return False, "I need a recipient, subject, and message to send an email."
             to, subject, body = parts
-            return True, send_email(to.strip(), subject.strip(), body.strip())
+            return send_email(to.strip(), subject.strip(), body.strip())
         if action_name == "calendar_today":
-            return True, get_today_events()
+            return get_today_events()
         if action_name == "calendar_upcoming":
-            return True, get_upcoming_events()
+            return get_upcoming_events()
         if action_name == "calendar_range" and param:
             parts = param.split("|")
             start = parts[0].strip() if len(parts) > 0 else None
             end   = parts[1].strip() if len(parts) > 1 else None
-            return True, get_events_in_range(start, end)
+            return get_events_in_range(start, end)
         if action_name == "calendar_create" and param:
             parts = param.split("|")
             if len(parts) < 3:
@@ -356,11 +381,11 @@ def handle_email_calendar(action_name: str, param):
             date_str = parts[1].strip()
             time_str = parts[2].strip()
             duration = parts[3].strip() if len(parts) > 3 else "1"
-            return True, create_event(title, date_str, time_str, duration)
+            return create_event(title, date_str, time_str, duration)
         if action_name == "calendar_delete" and param:
-            return True, delete_event(param.strip())
+            return delete_event(param.strip())
         if action_name == "calendar_delete_date" and param:
-            return True, delete_events_by_date(param.strip())
+            return delete_events_by_date(param.strip())
         return False, None
     except Exception as e:
         print(f"[actions] Email/Calendar error: {e}")

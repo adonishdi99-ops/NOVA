@@ -43,6 +43,7 @@ def main_mod(monkeypatch):
             SIMPLE_ACTIONS={"system_sleep": None, "system_restart": None,
                             "system_shutdown": None, "screenshot": None},
             DANGEROUS_ACTIONS={"system_restart", "system_shutdown", "system_sleep"},
+            is_blocked_app=lambda name: False,
         ),
         "calendar_agent": _module(
             "calendar_agent",
@@ -59,3 +60,26 @@ def main_mod(monkeypatch):
     main._test_calls = calls
     yield main
     sys.modules.pop("main", None)
+
+
+@pytest.fixture
+def load_brain(monkeypatch):
+    """Import brain.py fresh with a chosen GROQ_API_KEY (None = unset).
+    A real .env is never read, and conversation memory starts empty."""
+    import dotenv
+    import memory
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    memory.forget()
+
+    def _load(key):
+        if key is None:
+            monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        else:
+            monkeypatch.setenv("GROQ_API_KEY", key)
+        monkeypatch.delitem(sys.modules, "brain", raising=False)
+        import brain
+        return brain
+
+    yield _load
+    sys.modules.pop("brain", None)
+    memory.forget()

@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
 from googleapiclient.discovery import build
-from google_auth import get_credentials
+from google_auth import get_credentials, auth_failure
 
 
 def _resolve_local_zone():
@@ -35,8 +35,27 @@ LOCAL_TZ, LOCAL_ZONE = _resolve_local_zone()
 print(f"[calendar] Using timezone: {LOCAL_TZ}")
 
 
+_svc = None
+
+
 def _service():
-    return build('calendar', 'v3', credentials=get_credentials())
+    """Calendar API client, built once and reused (it refreshes its own token)."""
+    global _svc
+    if _svc is None:
+        _svc = build('calendar', 'v3', credentials=get_credentials())
+    return _svc
+
+
+def _fail(e, where, message):
+    """Log a failure and return (False, spoken message). A dead Google sign-in
+    gets the re-authorise message instead, and the cached client is dropped."""
+    global _svc
+    print(f"[calendar] {where} error: {e}")
+    reauth = auth_failure(e)
+    if reauth:
+        _svc = None
+        return False, reauth
+    return False, message
 
 
 def _now():
@@ -53,22 +72,32 @@ def _local_day_bounds(first_date, last_date=None):
     return start, end
 
 
-def _event_when(e):
-    """Spoken date (and time) of an event in local time, e.g. 'Friday November 20 at 6:00 PM'."""
+def _local_start(e):
+    """Local start of an event: an aware datetime for timed events, a date for
+    all-day events (which have start.date and no start.dateTime)."""
     start = e.get('start', {})
     if 'dateTime' in start:
-        dt = datetime.fromisoformat(start['dateTime'].replace('Z', '+00:00')).astimezone(LOCAL_ZONE)
-        return f"{dt:%A %B} {dt.day} at {dt.strftime('%I:%M %p').lstrip('0')}"
-    d = date.fromisoformat(start.get('date', ''))
-    return f"{d:%A %B} {d.day}, all day"
+        return datetime.fromisoformat(start['dateTime'].replace('Z', '+00:00')).astimezone(LOCAL_ZONE)
+    return date.fromisoformat(start.get('date', ''))
 
 
-def _fmt_time(dt_str):
-    try:
-        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00')).astimezone()
-        return dt.strftime('%I:%M %p').lstrip('0')
-    except Exception:
-        return dt_str
+def _clock(e):
+    """'6:00 PM' for a timed event, None for an all-day event."""
+    start = _local_start(e)
+    return start.strftime('%I:%M %p').lstrip('0') if isinstance(start, datetime) else None
+
+
+def _event_when(e):
+    """Spoken date (and time) of an event in local time, e.g. 'Friday November 20 at 6:00 PM'
+    or 'Friday November 20, all day'."""
+    start, clock = _local_start(e), _clock(e)
+    day = f"{start:%A %B} {start.day}"
+    return f"{day} at {clock}" if clock else f"{day}, all day"
+
+
+def _local_start_date(e):
+    start = _local_start(e)
+    return start.date() if isinstance(start, datetime) else start
 
 
 def _is_valid_date(s):
@@ -93,25 +122,24 @@ def get_today_events():
         ).execute().get('items', [])
 
         if not events:
-            return "You have no events scheduled for today."
+            return True, "You have no events scheduled for today."
 
         parts = []
         for e in events:
-            title    = e.get('summary', 'Untitled')
-            start_dt = e['start'].get('dateTime', e['start'].get('date', ''))
-            parts.append(f"{title} at {_fmt_time(start_dt)}")
+            title = e.get('summary', 'Untitled')
+            clock = _clock(e)
+            parts.append(f"{title} at {clock}" if clock else f"{title}, all day")
 
-        return f"Today you have {len(parts)} event{'s' if len(parts) > 1 else ''}: " + ", ".join(parts) + "."
+        return True, f"Today you have {len(parts)} event{'s' if len(parts) > 1 else ''}: " + ", ".join(parts) + "."
 
     except Exception as e:
-        print(f"[calendar] Error: {e}")
-        return "I couldn't fetch your calendar right now."
+        return _fail(e, "Today", "I couldn't fetch your calendar right now.")
 
 
 def get_upcoming_events(days=7):
     try:
         svc = _service()
-        now = datetime.now(timezone.utc)
+        now = _now()
         end = now + timedelta(days=days)
 
         events = svc.events().list(
@@ -124,24 +152,13 @@ def get_upcoming_events(days=7):
         ).execute().get('items', [])
 
         if not events:
-            return f"You have no events in the next {days} days."
+            return True, f"You have no events in the next {days} days."
 
-        parts = []
-        for e in events:
-            title    = e.get('summary', 'Untitled')
-            start_dt = e['start'].get('dateTime', e['start'].get('date', ''))
-            try:
-                dt    = datetime.fromisoformat(start_dt.replace('Z', '+00:00')).astimezone()
-                label = dt.strftime('%A %B %d at %I:%M %p').lstrip('0')
-            except Exception:
-                label = start_dt
-            parts.append(f"{title} on {label}")
-
-        return "Upcoming events: " + ". ".join(parts) + "."
+        parts = [f"{e.get('summary', 'Untitled')} on {_event_when(e)}" for e in events]
+        return True, "Upcoming events: " + ". ".join(parts) + "."
 
     except Exception as e:
-        print(f"[calendar] Error: {e}")
-        return "I couldn't fetch your upcoming events."
+        return _fail(e, "Upcoming", "I couldn't fetch your upcoming events.")
 
 
 def get_events_in_range(start_date_str, end_date_str):
@@ -160,34 +177,23 @@ def get_events_in_range(start_date_str, end_date_str):
         ).execute().get('items', [])
 
         if not events:
-            return f"You have no events between {start_date_str} and {end_date_str}."
+            return True, f"You have no events between {start_date_str} and {end_date_str}."
 
-        parts = []
-        for e in events:
-            title    = e.get('summary', 'Untitled')
-            start_dt = e['start'].get('dateTime', e['start'].get('date', ''))
-            try:
-                dt    = datetime.fromisoformat(start_dt.replace('Z', '+00:00')).astimezone()
-                label = dt.strftime('%A %B %d at %I:%M %p').lstrip('0')
-            except Exception:
-                label = start_dt
-            parts.append(f"{title} on {label}")
-
-        return "Events found: " + ". ".join(parts) + "."
+        parts = [f"{e.get('summary', 'Untitled')} on {_event_when(e)}" for e in events]
+        return True, "Events found: " + ". ".join(parts) + "."
 
     except Exception as e:
-        print(f"[calendar] Range error: {e}")
-        return "I couldn't fetch events for that period."
+        return _fail(e, "Range", "I couldn't fetch events for that period.")
 
 
 def create_event(title, date_str, time_str, duration_hours=1):
     if not _is_valid_date(date_str):
         print(f"[calendar] Bad date: '{date_str}'")
-        return "I couldn't create the event. The date format was wrong. Please say a clear date like 'June 23rd'."
+        return False, "I couldn't create the event. The date format was wrong. Please say a clear date like 'June 23rd'."
 
     if not _is_valid_time(time_str):
         print(f"[calendar] Bad time: '{time_str}'")
-        return "I couldn't create the event. The time format was wrong. Please say a clear time like '3 PM'."
+        return False, "I couldn't create the event. The time format was wrong. Please say a clear time like '3 PM'."
 
     try:
         svc   = _service()
@@ -202,11 +208,10 @@ def create_event(title, date_str, time_str, duration_hours=1):
 
         svc.events().insert(calendarId='primary', body=event).execute()
         spoken_time = start.strftime('%I:%M %p on %A %B %d').lstrip('0')
-        return f"Done. I've added '{title}' to your calendar at {spoken_time}."
+        return True, f"Done. I've added '{title}' to your calendar at {spoken_time}."
 
     except Exception as e:
-        print(f"[calendar] Create error: {e}")
-        return "I wasn't able to create that event."
+        return _fail(e, "Create", "I wasn't able to create that event.")
 
 
 MIN_QUERY_CHARS  = 3     # "a", "it", "x" etc. are too vague to delete by
@@ -248,8 +253,7 @@ def find_event_by_name(event_title):
             orderBy='startTime'
         ).execute().get('items', [])
     except Exception as e:
-        print(f"[calendar] Find error: {e}")
-        return None, "I couldn't check your calendar right now."
+        return None, _fail(e, "Find", "I couldn't check your calendar right now.")[1]
 
     best, best_score = None, 0.0
     for e in events:                      # sorted by start: ties keep the earliest
@@ -270,23 +274,25 @@ def delete_event_by_id(event_id, title):
         _service().events().delete(calendarId='primary', eventId=event_id).execute()
         return True, f"Done. I've removed '{title}' from your calendar."
     except Exception as e:
-        print(f"[calendar] Delete error: {e}")
-        return False, "I wasn't able to delete that event."
+        return _fail(e, "Delete", "I wasn't able to delete that event.")
 
 
 def delete_event(event_title):
     """Delete the best match for the given title (today onwards). Kept for
-    callers that don't confirm first; main.py uses find + delete_event_by_id."""
+    callers that don't confirm first; main.py uses find + delete_event_by_id.
+    Returns (success, spoken message)."""
     match, reason = find_event_by_name(event_title)
     if not match:
-        return reason
-    return delete_event_by_id(match["id"], match["title"])[1]
+        return False, reason
+    return delete_event_by_id(match["id"], match["title"])
 
 
 def delete_events_by_date(date_str):
-    """Delete ALL events on a specific date (YYYY-MM-DD)."""
+    """Delete every event that STARTS on a specific local date (YYYY-MM-DD).
+    Events that merely overlap it (a trip from the day before, a party running
+    past midnight) are left alone. Returns (success, spoken message)."""
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str.strip()):
-        return "Invalid date format for deletion."
+        return False, "Invalid date format for deletion."
 
     try:
         svc        = _service()
@@ -299,6 +305,8 @@ def delete_events_by_date(date_str):
             singleEvents=True,
             orderBy='startTime'
         ).execute().get('items', [])
+        target = start.date()
+        events = [e for e in events if _local_start_date(e) == target]
 
         try:
             readable = datetime.fromisoformat(date_str).strftime('%A %B %d')
@@ -306,7 +314,7 @@ def delete_events_by_date(date_str):
             readable = date_str
 
         if not events:
-            return f"No events found on {readable}."
+            return True, f"No events found on {readable}."
 
         deleted, failed = [], []
         for e in events:
@@ -323,11 +331,10 @@ def delete_events_by_date(date_str):
 
         done_msg = f"Deleted {_plural(len(deleted))} on {readable}: {', '.join(deleted)}."
         if not failed:
-            return f"Done. {done_msg}"
+            return True, f"Done. {done_msg}"
         if not deleted:
-            return f"I wasn't able to delete any events on {readable}. Failed: {', '.join(failed)}."
-        return f"{done_msg} I couldn't delete {_plural(len(failed))}: {', '.join(failed)}."
+            return False, f"I wasn't able to delete any events on {readable}. Failed: {', '.join(failed)}."
+        return False, f"{done_msg} I couldn't delete {_plural(len(failed))}: {', '.join(failed)}."
 
     except Exception as e:
-        print(f"[calendar] Delete date error: {e}")
-        return "I wasn't able to delete those events."
+        return _fail(e, "Delete date", "I wasn't able to delete those events.")

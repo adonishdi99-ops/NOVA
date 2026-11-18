@@ -10,20 +10,18 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fake_calendar import FakeService, event
+from fake_calendar import FakeService, all_day_event, event
 
 LAGOS = ZoneInfo("Africa/Lagos")
 
 
 @pytest.fixture
 def cal(monkeypatch):
-    # calendar_agent imports the Google client + OAuth helper at module level.
+    # calendar_agent imports the Google API client at module level.
     discovery = types.ModuleType("googleapiclient.discovery")
     discovery.build = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "googleapiclient", types.ModuleType("googleapiclient"))
     monkeypatch.setitem(sys.modules, "googleapiclient.discovery", discovery)
-    monkeypatch.setitem(sys.modules, "google_auth",
-                        types.SimpleNamespace(get_credentials=lambda: None))
     monkeypatch.delitem(sys.modules, "calendar_agent", raising=False)
     import calendar_agent
     monkeypatch.setattr(calendar_agent, "LOCAL_TZ", "Africa/Lagos")
@@ -61,7 +59,8 @@ def test_range_bounds_include_whole_last_day(cal):
 
 def test_delete_by_date_hits_exactly_the_local_day(cal, monkeypatch):
     events = use_service(cal, monkeypatch, ALL)
-    msg = cal.delete_events_by_date("2026-11-20")
+    ok, msg = cal.delete_events_by_date("2026-11-20")
+    assert ok is True
     # 00:30 on the 20th is included (UTC bounds missed it); 00:30 on the
     # 21st is NOT deleted (UTC bounds deleted it); 23:30 on the 19th is safe.
     assert sorted(events.deleted) == ["early20", "noon20"]
@@ -72,7 +71,8 @@ def test_today_at_0030_local_is_the_local_date(cal, monkeypatch):
     # 00:30 in Lagos on the 20th is still 23:30 on the 19th in UTC.
     monkeypatch.setattr(cal, "_now", lambda: datetime(2026, 11, 20, 0, 30, tzinfo=LAGOS))
     events = use_service(cal, monkeypatch, ALL)
-    msg = cal.get_today_events()
+    ok, msg = cal.get_today_events()
+    assert ok is True
     call = events.list_calls[0]
     assert (call["timeMin"], call["timeMax"]) == (
         "2026-11-20T00:00:00+01:00", "2026-11-21T00:00:00+01:00")
@@ -82,7 +82,8 @@ def test_today_at_0030_local_is_the_local_date(cal, monkeypatch):
 
 def test_range_query_uses_local_days(cal, monkeypatch):
     events = use_service(cal, monkeypatch, ALL)
-    msg = cal.get_events_in_range("2026-11-20", "2026-11-20")
+    ok, msg = cal.get_events_in_range("2026-11-20", "2026-11-20")
+    assert ok is True
     assert "Early run" in msg and "Lunch" in msg and "Night bus" not in msg
     assert events.list_calls[0]["timeMax"] == "2026-11-21T00:00:00+01:00"
 
@@ -118,7 +119,8 @@ def test_tz_detected_zone_is_used(cal, monkeypatch, capsys):
 # ── M7: delete-by-date reports deleted and failed ───────────────────────────
 def test_delete_by_date_partial_failure_reports_both(cal, monkeypatch):
     events = use_service(cal, monkeypatch, ALL, fail_ids={"noon20"})
-    msg = cal.delete_events_by_date("2026-11-20")
+    ok, msg = cal.delete_events_by_date("2026-11-20")
+    assert ok is False
     assert events.deleted == ["early20"]
     assert msg == ("Deleted 1 event on Friday November 20: Early run. "
                    "I couldn't delete 1 event: Lunch.")
@@ -126,7 +128,8 @@ def test_delete_by_date_partial_failure_reports_both(cal, monkeypatch):
 
 def test_delete_by_date_total_failure(cal, monkeypatch):
     use_service(cal, monkeypatch, ALL, fail_ids={"early20", "noon20"})
-    msg = cal.delete_events_by_date("2026-11-20")
+    ok, msg = cal.delete_events_by_date("2026-11-20")
+    assert ok is False
     assert msg == "I wasn't able to delete any events on Friday November 20. Failed: Early run, Lunch."
 
 
@@ -188,3 +191,67 @@ def test_delete_event_by_id_failure(cal, monkeypatch):
     use_service(cal, monkeypatch, UPCOMING, fail_ids={"gym1"})
     assert cal.delete_event_by_id("gym1", "Gym with Sarah") == (
         False, "I wasn't able to delete that event.")
+
+
+# ── All-day events (start.date, no dateTime) ────────────────────────────────
+HOLIDAY_20TH = all_day_event("hol20", "Public holiday", "2026-11-20", "2026-11-21")
+HOLIDAY_21ST = all_day_event("hol21", "Weekend away", "2026-11-21", "2026-11-22")
+TRIP_19_21   = all_day_event("trip", "Conference trip", "2026-11-19", "2026-11-22")  # 3 days
+PARTY_PAST_MIDNIGHT = event("party", "Party", "2026-11-19T23:00:00+01:00", "2026-11-20T01:00:00+01:00")
+WITH_ALL_DAY = ALL + [HOLIDAY_20TH, HOLIDAY_21ST, TRIP_19_21, PARTY_PAST_MIDNIGHT]
+
+
+def test_delete_by_date_includes_all_day_event_on_that_day_only(cal, monkeypatch):
+    events = use_service(cal, monkeypatch, WITH_ALL_DAY)
+    ok, msg = cal.delete_events_by_date("2026-11-20")
+    assert ok is True
+    assert sorted(events.deleted) == ["early20", "hol20", "noon20"]
+    # Overlapping events that started earlier survive: the 3-day trip from the
+    # 19th and the party running past midnight. The 21st's all-day event too.
+    assert {"trip", "party", "hol21", "late19", "early21"} <= {e["id"] for e in events.items}
+    assert msg == ("Done. Deleted 3 events on Friday November 20: "
+                   "Public holiday, Early run, Lunch.")
+
+
+def test_today_lists_all_day_event_without_fake_midnight_time(cal, monkeypatch):
+    monkeypatch.setattr(cal, "_now", lambda: datetime(2026, 11, 20, 9, 0, tzinfo=LAGOS))
+    use_service(cal, monkeypatch, [HOLIDAY_20TH, NOON_20TH, HOLIDAY_21ST])
+    ok, msg = cal.get_today_events()
+    assert ok is True
+    assert msg == "Today you have 2 events: Public holiday, all day, Lunch at 12:00 PM."
+
+
+def test_upcoming_lists_all_day_and_timed_events(cal, monkeypatch):
+    monkeypatch.setattr(cal, "_now", lambda: datetime(2026, 11, 20, 9, 0, tzinfo=LAGOS))
+    use_service(cal, monkeypatch, [HOLIDAY_21ST, NOON_20TH])
+    ok, msg = cal.get_upcoming_events()
+    assert ok is True
+    assert msg == ("Upcoming events: Lunch on Friday November 20 at 12:00 PM. "
+                   "Weekend away on Saturday November 21, all day.")
+
+
+def test_find_all_day_event_gives_all_day_confirmation_text(cal, monkeypatch):
+    use_service(cal, monkeypatch, [all_day_event("bday", "Mum's birthday", "2099-11-20", "2099-11-21")])
+    match, reason = cal.find_event_by_name("mum's birthday")
+    assert reason is None
+    assert match == {"id": "bday", "title": "Mum's birthday", "when": "Friday November 20, all day"}
+
+
+# ── M3: success flags ───────────────────────────────────────────────────────
+def test_create_event_bad_date_reports_failure(cal):
+    ok, msg = cal.create_event("Gym", "next friday", "18:00")
+    assert ok is False and "date format was wrong" in msg
+
+
+def test_listing_failure_reports_false(cal, monkeypatch):
+    def broken():
+        raise RuntimeError("HttpError 503")
+    monkeypatch.setattr(cal, "_service", broken)
+    assert cal.get_today_events() == (False, "I couldn't fetch your calendar right now.")
+    assert cal.get_upcoming_events() == (False, "I couldn't fetch your upcoming events.")
+
+
+def test_delete_event_wrapper_returns_tuple(cal, monkeypatch):
+    use_service(cal, monkeypatch, UPCOMING)
+    assert cal.delete_event("dentist")[0] is False
+    assert cal.delete_event("gym") == (True, "Done. I've removed 'Gym with Sarah' from your calendar.")

@@ -133,3 +133,29 @@ def test_execute_open_app_with_injection_is_refused(actions_mod):
 
 def test_system_sleep_is_gated(actions_mod):
     assert "system_sleep" in actions_mod.DANGEROUS_ACTIONS
+
+
+# ── Blocklist for system tools ──────────────────────────────────────────────
+BLOCKED = ["logoff", "tsdiscon", "shutdown", "format", "diskpart", "bcdedit", "reg",
+           "regedit", "cipher", "takeown", "icacls", "wmic", "net", "sc", "rundll32", "mshta"]
+
+
+@pytest.mark.parametrize("name", BLOCKED + ["Shutdown.exe", "FORMAT.COM", "diskpart.exe", " net "])
+def test_blocked_system_tools_never_launch(actions_mod, monkeypatch, name):
+    looked_up = []
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda n: looked_up.append(n) or r"C:\Windows\System32\x.exe")
+    assert actions_mod.is_blocked_app(name) is True
+    assert actions_mod._open_app(name) is False
+    assert looked_up == [] and actions_mod._spawned == []
+
+
+def test_blocklist_overrides_builtins_and_index(actions_mod, monkeypatch):
+    # regedit was a built-in, and an index entry by that name must not win either
+    monkeypatch.setitem(actions_mod.APP_DB, "regedit", r"C:\fake\regedit.lnk")
+    assert actions_mod._open_app("regedit") is False
+    assert actions_mod._spawned == []
+
+
+@pytest.mark.parametrize("name", ["notepad", "netflix", "scrcpy", "regex tool", "formatter"])
+def test_similar_names_are_not_blocked(actions_mod, name):
+    assert actions_mod.is_blocked_app(name) is False

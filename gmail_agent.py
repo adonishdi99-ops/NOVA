@@ -2,11 +2,30 @@
 import base64
 from email.mime.text import MIMEText
 from googleapiclient.discovery import build
-from google_auth import get_credentials
+from google_auth import get_credentials, auth_failure
+
+
+_svc = None
 
 
 def _service():
-    return build('gmail', 'v1', credentials=get_credentials())
+    """Gmail API client, built once and reused (it refreshes its own token)."""
+    global _svc
+    if _svc is None:
+        _svc = build('gmail', 'v1', credentials=get_credentials())
+    return _svc
+
+
+def _fail(e, where, message):
+    """Log a failure and return (False, spoken message). A dead Google sign-in
+    gets the re-authorise message instead, and the cached client is dropped."""
+    global _svc
+    print(f"[gmail] {where} error: {e}")
+    reauth = auth_failure(e)
+    if reauth:
+        _svc = None
+        return False, reauth
+    return False, message
 
 
 def _decode_body(payload):
@@ -22,7 +41,7 @@ def _decode_body(payload):
 
 
 def get_unread_emails(max_results=5):
-    """Return a spoken summary of unread emails."""
+    """Returns (success, spoken summary of unread emails)."""
     try:
         svc     = _service()
         results = svc.users().messages().list(
@@ -31,7 +50,7 @@ def get_unread_emails(max_results=5):
 
         messages = results.get('messages', [])
         if not messages:
-            return "You have no unread emails."
+            return True, "You have no unread emails."
 
         summaries = []
         for msg in messages:
@@ -44,15 +63,14 @@ def get_unread_emails(max_results=5):
 
         count = len(summaries)
         intro = f"You have {count} unread email{'s' if count > 1 else ''}. "
-        return intro + ". ".join(summaries)
+        return True, intro + ". ".join(summaries)
 
     except Exception as e:
-        print(f"[gmail] Error: {e}")
-        return "I couldn't fetch your emails right now."
+        return _fail(e, "Unread", "I couldn't fetch your emails right now.")
 
 
 def read_latest_email():
-    """Read the content of the most recent unread email."""
+    """Returns (success, spoken content of the most recent unread email)."""
     try:
         svc     = _service()
         results = svc.users().messages().list(
@@ -61,7 +79,7 @@ def read_latest_email():
 
         messages = results.get('messages', [])
         if not messages:
-            return "You have no unread emails."
+            return True, "You have no unread emails."
 
         msg_id  = messages[0]['id']
         detail  = svc.users().messages().get(userId='me', id=msg_id, format='full').execute()
@@ -75,15 +93,14 @@ def read_latest_email():
             userId='me', id=msg_id, body={'removeLabelIds': ['UNREAD']}
         ).execute()
 
-        return f"Email from {sender}. Subject: {subject}. {body}"
+        return True, f"Email from {sender}. Subject: {subject}. {body}"
 
     except Exception as e:
-        print(f"[gmail] Error: {e}")
-        return "I couldn't read that email right now."
+        return _fail(e, "Read", "I couldn't read that email right now.")
 
 
 def send_email(to, subject, body):
-    """Send an email."""
+    """Send an email. Returns (success, spoken message)."""
     try:
         svc     = _service()
         message = MIMEText(body)
@@ -91,7 +108,6 @@ def send_email(to, subject, body):
         message['subject'] = subject
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        return f"Email sent to {to}."
+        return True, f"Email sent to {to}."
     except Exception as e:
-        print(f"[gmail] Send error: {e}")
-        return "I wasn't able to send the email."
+        return _fail(e, "Send", "I wasn't able to send the email.")

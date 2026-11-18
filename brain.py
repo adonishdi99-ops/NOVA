@@ -1,7 +1,9 @@
 # brain.py
 import os
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import groq
 from groq import Groq
 from memory import remember, recall
 
@@ -22,7 +24,12 @@ def groq_key_problem():
 
 # Created only with a usable key, so importing brain never crashes; main.run()
 # reports the problem via groq_key_problem() before anything else starts.
-client    = None if groq_key_problem() else Groq(api_key=GROQ_API_KEY)
+# Short timeout and one retry: a stuck request must not freeze NOVA for minutes.
+GROQ_TIMEOUT_S   = 15.0
+GROQ_MAX_RETRIES = 1
+
+client    = None if groq_key_problem() else Groq(
+    api_key=GROQ_API_KEY, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
 USER_NAME = os.getenv("USER_NAME", "Boss")
 MAX_HISTORY = 10
 
@@ -137,49 +144,75 @@ Be confident and concise. For things you don't know, say so briefly.
 """
 
 
+# ##ACTION:name## or ##ACTION:name:param## — the param runs to the first closing ##.
+ACTION_TAG = re.compile(r"##ACTION:\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::(.*?))?##", re.DOTALL)
+
+FAKE_ACTIONS = {
+    "none", "null", "remind", "alarm", "query",
+    "calendar_update", "change_system_color",
+    "available_actions", "open_browser",
+}
+
+
+def parse_reply(full_reply: str):
+    """Split an LLM reply into (spoken, action_name, action_param).
+
+    Only the first well-formed tag counts. Text after its closing ## is
+    dropped, extra tags are logged and ignored, the name is lower-cased.
+    A malformed tag is never spoken aloud."""
+    tags = list(ACTION_TAG.finditer(full_reply))
+    if not tags:
+        if "##ACTION" in full_reply:
+            print(f"[brain] Ignoring malformed action tag: {full_reply!r}")
+            return full_reply.split("##ACTION", 1)[0].strip(), None, None
+        return full_reply.strip(), None, None
+
+    first  = tags[0]
+    spoken = full_reply[:first.start()].strip()
+    if "##ACTION" in spoken:                     # a broken tag before the good one
+        spoken = spoken.split("##ACTION", 1)[0].strip()
+    if len(tags) > 1:
+        print(f"[brain] Ignoring extra action tags: {[t.group(0) for t in tags[1:]]}")
+    trailing = full_reply[first.end():].strip()
+    if trailing:
+        print(f"[brain] Dropped text after action tag: {trailing!r}")
+
+    action_name  = first.group(1).strip().lower()
+    action_param = (first.group(2) or "").strip() or None
+    if action_name in FAKE_ACTIONS:
+        print(f"[brain] Filtered hallucinated action: {action_name}")
+        return spoken, None, None
+    return spoken, action_name, action_param
+
+
 def think(command: str):
     if client is None:
         return "My Groq API key isn't set, so I can't think right now.", None, None
+
+    # The user turn is only stored once the call succeeds, so a failed call
+    # leaves no orphan message in history.
+    user_msg = {"role": "user", "content": command}
+    history  = recall()[-(MAX_HISTORY - 1):] + [user_msg]
+    messages = [{"role": "system", "content": _build_system_prompt()}] + history
+
     try:
-        remember("user", command)
-
-        history  = recall()[-MAX_HISTORY:]
-        messages = [{"role": "system", "content": _build_system_prompt()}] + history
-
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages
-        )
-
-        full_reply = response.choices[0].message.content.strip()
-        remember("assistant", full_reply)
-
-        action_name  = None
-        action_param = None
-        spoken       = full_reply
-
-        if "##ACTION:" in full_reply:
-            parts  = full_reply.split("##ACTION:")
-            spoken = parts[0].strip()
-            raw    = parts[1].replace("##", "").strip()
-
-            if ":" in raw:
-                action_name, action_param = raw.split(":", 1)
-            else:
-                action_name = raw
-
-            FAKE_ACTIONS = {
-                "none", "null", "", "remind", "alarm", "query",
-                "calendar_update", "change_system_color",
-                "available_actions", "open_browser",
-            }
-            if action_name and action_name.lower() in FAKE_ACTIONS:
-                print(f"[brain] Filtered hallucinated action: {action_name}")
-                action_name  = None
-                action_param = None
-
-        return spoken, action_name, action_param
-
+        response = client.chat.completions.create(model=MODEL, messages=messages)
+        content  = response.choices[0].message.content
+    except groq.RateLimitError as e:
+        print(f"[brain] Rate limited (429): {e}")
+        return "I'm being rate limited by Groq right now. Please try again in a minute.", None, None
+    except groq.APITimeoutError as e:
+        print(f"[brain] Timed out after {GROQ_TIMEOUT_S:.0f}s: {e}")
+        return "My brain took too long to answer. Please try again.", None, None
     except Exception as e:
         print("BRAIN ERROR:", e)
         return "I couldn't reach my brain right now.", None, None
+
+    full_reply = (content or "").strip()
+    if not full_reply:
+        print(f"[brain] Empty reply from model (content={content!r})")
+        return "I didn't get an answer from my brain. Please try again.", None, None
+
+    remember("user", command)
+    remember("assistant", full_reply)
+    return parse_reply(full_reply)

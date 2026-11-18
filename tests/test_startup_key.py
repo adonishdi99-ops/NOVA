@@ -1,26 +1,5 @@
 """H6: a missing GROQ_API_KEY gives a clear startup message, not an import crash."""
-import sys
-
-import dotenv
 import pytest
-
-
-@pytest.fixture
-def load_brain(monkeypatch):
-    # Never read a real .env from disk during tests.
-    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
-
-    def _load(key):
-        if key is None:
-            monkeypatch.delenv("GROQ_API_KEY", raising=False)
-        else:
-            monkeypatch.setenv("GROQ_API_KEY", key)
-        monkeypatch.delitem(sys.modules, "brain", raising=False)
-        import brain
-        return brain
-
-    yield _load
-    sys.modules.pop("brain", None)
 
 
 @pytest.mark.parametrize("key", [None, "", "   ", "your_groq_api_key_here"])

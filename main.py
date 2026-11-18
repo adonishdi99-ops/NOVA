@@ -1,5 +1,4 @@
 # main.py
-import os
 import re
 import sys
 import time
@@ -9,7 +8,9 @@ import webbrowser
 import server
 from voice import speak, listen
 from brain import think, groq_key_problem
-from actions import execute, handle_email_calendar, SIMPLE_ACTIONS, DANGEROUS_ACTIONS
+from pathlib import Path
+from actions import (execute, handle_email_calendar, is_blocked_app,
+                     SIMPLE_ACTIONS, DANGEROUS_ACTIONS)
 from calendar_agent import find_event_by_name, delete_event_by_id
 
 SHUTDOWN_PHRASES = [
@@ -108,6 +109,14 @@ def ask_confirm(prompt: str) -> bool:
     return confirmed
 
 
+def _ui_url() -> str:
+    """file:// URL of UI.html next to this file, whatever folder NOVA is started from."""
+    ui_path = Path(__file__).resolve().parent / "UI.html"
+    if not ui_path.exists():
+        print(f"[main] WARNING: UI not found at {ui_path}")
+    return ui_path.as_uri()
+
+
 def run():
     problem = groq_key_problem()
     if problem:
@@ -115,8 +124,7 @@ def run():
         sys.exit(1)
 
     server.start()
-    ui_path = os.path.abspath("ui.html")
-    webbrowser.open(f"file:///{ui_path}")
+    webbrowser.open(_ui_url())
 
     # True while a command is being processed/spoken, so the voice thread
     # doesn't pick NOVA's own speech back up (or fight with typed input).
@@ -245,7 +253,9 @@ def _handle_command(command: str) -> bool:
     else:
         success = execute(action, param)
         if not success:
-            if action == "open_app":
+            if action == "open_app" and is_blocked_app(param or ""):
+                nova_speak(f"I won't open {param}. It's a system tool I'm not allowed to launch.")
+            elif action == "open_app":
                 nova_speak(f"I couldn't find {param or 'that app'} on your computer.")
             elif action == "close_app":
                 nova_speak(f"I couldn't close {param or 'that app'}.")

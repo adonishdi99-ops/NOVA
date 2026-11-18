@@ -78,3 +78,30 @@ def test_calendar_delete_no_match_speaks_reason_without_asking(main_mod):
     main_mod._handle_command("delete dentist")
     assert main_mod._test_calls["spoken"] == ["I couldn't find an event called 'dentist'."]
     assert main_mod._test_calls["deleted_ids"] == []
+
+
+def test_calendar_delete_all_day_confirmation_text(main_mod):
+    _think_returns(main_mod, "", "calendar_delete", "birthday")
+    main_mod.find_event_by_name = lambda name: (
+        {"id": "bday", "title": "Mum's birthday", "when": "Friday November 20, all day"}, None)
+    main_mod._handle_command("delete mum's birthday")
+    assert ("Are you sure you want to delete 'Mum's birthday' on Friday November 20, all day?"
+            in main_mod._test_calls["spoken"])
+
+
+def test_blocked_app_gets_spoken_reason(main_mod):
+    _think_returns(main_mod, "", "open_app", "diskpart")
+    main_mod.execute = lambda a, p=None: False
+    main_mod.is_blocked_app = lambda name: name == "diskpart"
+    main_mod._handle_command("open diskpart")
+    assert main_mod._test_calls["spoken"][-1] == (
+        "I won't open diskpart. It's a system tool I'm not allowed to launch.")
+
+
+def test_ui_url_is_absolute_and_independent_of_cwd(main_mod, tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)                  # start NOVA from some other folder
+    url = main_mod._ui_url()
+    assert url.startswith("file:///") and url.endswith("/UI.html")
+    expected = Path(main_mod.__file__).resolve().parent / "UI.html"
+    assert expected.exists() and url == expected.as_uri()
